@@ -1,20 +1,26 @@
-# Environment variables
+# Secret files
 .env
 *.env
 
 # Virtual environments
 .venv/
 venv/
+env/
 
-# Python compiled files
+# Python cache
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 
-# IDE configs
+# Bot downloads & temporary files
+downloads/
+*.mp4
+*.m4a
+*.webm
+
+# IDEs
 .vscode/
 .idea/
 
 # OS junk
-Thumbs.db
 .DS_Store
+Thumbs.db
