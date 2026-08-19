@@ -7,11 +7,11 @@ from telebot import types
 from dotenv import load_dotenv
 import yt_dlp
 
-# تنظیمات لاگ
+# تنظیمات لاگ‌گیری
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# لود توکن از محیط محرمانه
+# بارگذاری توکن تلگرام
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -21,7 +21,20 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# ساخت دکمه‌های عملیات برای لینک ارسالی
+# تنظیمات پیش‌فرض برای حل مشکل ارور ۴۰۳ و شناسایی ربات توسط یوتیوب
+COMMON_OPTS = {
+    'quiet': True,
+    'noplaylist': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web']
+        }
+    },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+}
+
 def get_action_keyboard(url):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_video = types.InlineKeyboardButton("🎬 دانلود ویدیو", callback_data="act_video")
@@ -42,14 +55,12 @@ def send_welcome(message):
 def handle_link_input(message):
     url = message.text.strip()
     
-    # بررسی ساده معتبر بودن آدرس
     if not ("youtube.com" in url or "youtu.be" in url or "instagram.com" in url):
         return bot.reply_to(message, "❌ لطفاً یک لینک معتبر از یوتیوب یا اینستاگرام ارسال کنید.")
 
-    # ارسال منوی انتخاب نوع دانلود
     bot.reply_to(
         message,
-        f"🔗 لینک دریافت شد.\nلطفاً نوع خروجی مورد نظر را انتخاب کنید:\n`{url}`",
+        f"🔗 لینک دریافت شد:\n`{url}`\n\nگزینه مورد نظر را انتخاب کنید:",
         reply_markup=get_action_keyboard(url),
         parse_mode="Markdown"
     )
@@ -58,7 +69,6 @@ def handle_link_input(message):
 def handle_action_choice(call):
     bot.answer_callback_query(call.id)
     
-    # استخراج لینک از متن پیام قبلی
     original_text = call.message.text
     url = None
     for word in original_text.split():
@@ -81,34 +91,32 @@ def _process_request(b, msg, url, action_type):
 
     try:
         if action_type == "act_thumb":
-            # دریافت مستقیم تصویر کاور بدون نیاز به دانلود کل ویدیو
-            ydl_opts = {'quiet': True, 'skip_download': True}
+            ydl_opts = {
+                **COMMON_OPTS,
+                'skip_download': True
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 thumb_url = info.get('thumbnail')
                 
             if thumb_url:
-                b.send_photo(chat_id, thumb_url, caption=f"🖼 کاور ویدیوی: {info.get('title', '')[:80]}")
+                b.send_photo(chat_id, thumb_url, caption=f"🖼 کاور: {info.get('title', '')[:80]}")
             else:
-                b.send_message(chat_id, "❌ تصویری برای کاور این ویدیو یافت نشد.")
+                b.send_message(chat_id, "❌ تصویری برای کاور یافت نشد.")
             return
 
         elif action_type == "act_audio":
             b.send_chat_action(chat_id, 'upload_voice')
-            # دانلود فقط با فرمت صدا
             ydl_opts = {
-                'quiet': True,
-                'noplaylist': True,
+                **COMMON_OPTS,
                 'format': 'bestaudio[ext=m4a]/bestaudio/best',
                 'outtmpl': f'downloads/{chat_id}_%(id)s.%(ext)s',
                 'max_filesize': 50 * 1024 * 1024
             }
         else:
             b.send_chat_action(chat_id, 'upload_video')
-            # دانلود ویدیو
             ydl_opts = {
-                'quiet': True,
-                'noplaylist': True,
+                **COMMON_OPTS,
                 'format': 'best[ext=mp4]/best',
                 'outtmpl': f'downloads/{chat_id}_%(id)s.%(ext)s',
                 'max_filesize': 50 * 1024 * 1024
@@ -118,7 +126,6 @@ def _process_request(b, msg, url, action_type):
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
 
-        # ارسال فایل به تلگرام
         if action_type == "act_audio":
             with open(filename, 'rb') as audio_file:
                 b.send_audio(chat_id, audio_file, title=info.get('title', 'Audio')[:60])
@@ -126,14 +133,13 @@ def _process_request(b, msg, url, action_type):
             with open(filename, 'rb') as video_file:
                 b.send_video(chat_id, video_file, caption=f"🎬 {info.get('title', 'Video')[:80]}")
 
-        # حذف فایل موقت
         if os.path.exists(filename):
             os.remove(filename)
 
     except Exception as e:
         logger.error(f"Execution error: {e}")
-        b.send_message(chat_id, "❌ پردازش با خطا مواجه شد. (لینک نامعتبر، پیج خصوصی یا حجم فایل بالای ۵۰ مگابایت است)")
+        b.send_message(chat_id, "❌ خطایی در دانلود پیش آمد (ممکن است حجم بالای ۵۰ مگابایت باشد یا محتوا خصوصی باشد).")
 
 if __name__ == '__main__':
-    logger.info("Bot is running with audio/thumb extraction...")
+    logger.info("Bot is running...")
     bot.infinity_polling()
