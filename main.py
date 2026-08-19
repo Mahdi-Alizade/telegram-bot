@@ -11,9 +11,10 @@ import yt_dlp
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# بارگذاری توکن تلگرام
+# بارگذاری متغیرهای محیطی
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@spotifymetty")
 
 if not TOKEN:
     logger.critical("Missing TELEGRAM_BOT_TOKEN! Check your .env file.")
@@ -21,7 +22,7 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# تنظیمات پیش‌فرض برای حل مشکل ارور ۴۰۳ و شناسایی ربات توسط یوتیوب
+# تنظیمات دور زدن محدودیت یوتیوب
 COMMON_OPTS = {
     'quiet': True,
     'noplaylist': True,
@@ -35,7 +36,30 @@ COMMON_OPTS = {
     }
 }
 
+def is_user_member(user_id):
+    """بررسی عضویت کاربر در کانال اجباری"""
+    try:
+        member = bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        # وضعیت‌های معتبر کاربر داخل کانال
+        if member.status in ['creator', 'administrator', 'member']:
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error checking channel membership: {e}")
+        # در صورت بروز خطا در دسترسی ربات به کانال، مانع کاربری نشود
+        return True
+
+def get_join_keyboard():
+    """کیبورد اجبار عضویت"""
+    channel_clean = CHANNEL_USERNAME.replace('@', '')
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn_channel = types.InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{channel_clean}")
+    btn_verify = types.InlineKeyboardButton("🔄 تایید عضویت", callback_data="verify_membership")
+    markup.add(btn_channel, btn_verify)
+    return markup
+
 def get_action_keyboard(url):
+    """کیبورد انتخاب نوع خروجی"""
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_video = types.InlineKeyboardButton("🎬 دانلود ویدیو", callback_data="act_video")
     btn_audio = types.InlineKeyboardButton("🎧 استخراج صدا (Audio)", callback_data="act_audio")
@@ -46,15 +70,40 @@ def get_action_keyboard(url):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
+    if not is_user_member(message.from_user.id):
+        return bot.reply_to(
+            message,
+            f"⚠️ برای استفاده از این ربات، ابتدا باید در کانال ما عضو شوید:\n👉 {CHANNEL_USERNAME}",
+            reply_markup=get_join_keyboard()
+        )
+
     bot.reply_to(
         message,
         "👋 سلام! لینک ویدیوی یوتیوب یا اینستاگرام را ارسال کنید تا گزینه‌های دانلود نمایش داده شوند."
     )
 
+@bot.callback_query_handler(func=lambda call: call.data == "verify_membership")
+def handle_verification(call):
+    if is_user_member(call.from_user.id):
+        bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!", show_alert=True)
+        bot.edit_message_text(
+            "🎉 خوش آمدید! حالا می‌توانید لینک ویدیوی خود را برای دانلود ارسال کنید.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
+
 @bot.message_handler(func=lambda m: not m.text.startswith('/'))
 def handle_link_input(message):
+    if not is_user_member(message.from_user.id):
+        return bot.reply_to(
+            message,
+            f"⚠️ برای دانلود فایل‌ها، ابتدا باید در کانال ما عضو شوید:\n👉 {CHANNEL_USERNAME}",
+            reply_markup=get_join_keyboard()
+        )
+
     url = message.text.strip()
-    
     if not ("youtube.com" in url or "youtu.be" in url or "instagram.com" in url):
         return bot.reply_to(message, "❌ لطفاً یک لینک معتبر از یوتیوب یا اینستاگرام ارسال کنید.")
 
@@ -67,6 +116,14 @@ def handle_link_input(message):
 
 @bot.callback_query_handler(func=lambda call: call.data in ["act_video", "act_audio", "act_thumb"])
 def handle_action_choice(call):
+    if not is_user_member(call.from_user.id):
+        bot.answer_callback_query(call.id, "⚠️ لطفاً ابتدا در کانال عضو شوید.", show_alert=True)
+        return bot.send_message(
+            call.message.chat.id,
+            f"⚠️ برای ادامه استفاده، در کانال عضو شوید:\n👉 {CHANNEL_USERNAME}",
+            reply_markup=get_join_keyboard()
+        )
+
     bot.answer_callback_query(call.id)
     
     original_text = call.message.text
@@ -80,7 +137,7 @@ def handle_action_choice(call):
         return bot.edit_message_text("❌ لینک نامعتبر یا منقضی شده است.", call.message.chat.id, call.message.message_id)
 
     action_type = call.data
-    bot.edit_message_text("⏳ در حال پردازش و استخراج فایل... لطفاً شکیبا باشید.", call.message.chat.id, call.message.message_id)
+    bot.edit_message_text("⏳ در حال پردازش و دریافت فایل... لطفاً شکیبا باشید.", call.message.chat.id, call.message.message_id)
     
     thread = threading.Thread(target=_process_request, args=(bot, call.message, url, action_type))
     thread.start()
@@ -138,8 +195,8 @@ def _process_request(b, msg, url, action_type):
 
     except Exception as e:
         logger.error(f"Execution error: {e}")
-        b.send_message(chat_id, "❌ خطایی در دانلود پیش آمد (ممکن است حجم بالای ۵۰ مگابایت باشد یا محتوا خصوصی باشد).")
+        b.send_message(chat_id, "❌ خطایی در دانلود پیش آمد (ممکن است فایل بالای ۵۰ مگابایت، پیج خصوصی یا لینک منقضی باشد).")
 
 if __name__ == '__main__':
-    logger.info("Bot is running...")
+    logger.info("Bot is running with Force Join system...")
     bot.infinity_polling()
