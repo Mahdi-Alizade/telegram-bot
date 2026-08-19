@@ -7,14 +7,14 @@ from telebot import types
 from dotenv import load_dotenv
 import yt_dlp
 
-# تنظیمات لاگ‌گیری
+# تنظیمات لاگ
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # بارگذاری متغیرهای محیطی
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@spotifymetty")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@spotifymetty").strip()
 
 if not TOKEN:
     logger.critical("Missing TELEGRAM_BOT_TOKEN! Check your .env file.")
@@ -22,7 +22,7 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# تنظیمات دور زدن محدودیت یوتیوب
+# تنظیمات دور زدن محدودیت‌های یوتیوب
 COMMON_OPTS = {
     'quiet': True,
     'noplaylist': True,
@@ -37,20 +37,20 @@ COMMON_OPTS = {
 }
 
 def is_user_member(user_id):
-    """بررسی عضویت کاربر در کانال اجباری"""
+    """بررسی دقیق وضعیت عضویت کاربر در کانال"""
     try:
         member = bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        # وضعیت‌های معتبر کاربر داخل کانال
+        # فقط در صورتی که کاربر سازنده، ادمین یا ممبر عادی باشد True برگردان
         if member.status in ['creator', 'administrator', 'member']:
             return True
         return False
     except Exception as e:
-        logger.error(f"Error checking channel membership: {e}")
-        # در صورت بروز خطا در دسترسی ربات به کانال، مانع کاربری نشود
-        return True
+        logger.warning(f"Membership check failed: {e}")
+        # اگر خطایی رخ داد، قفل باید بسته بماند (False)
+        return False
 
 def get_join_keyboard():
-    """کیبورد اجبار عضویت"""
+    """کیبورد دکمه عضویت و بررسی مجدد"""
     channel_clean = CHANNEL_USERNAME.replace('@', '')
     markup = types.InlineKeyboardMarkup(row_width=1)
     btn_channel = types.InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{channel_clean}")
@@ -59,7 +59,7 @@ def get_join_keyboard():
     return markup
 
 def get_action_keyboard(url):
-    """کیبورد انتخاب نوع خروجی"""
+    """کیبورد انتخاب نوع دانلود"""
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_video = types.InlineKeyboardButton("🎬 دانلود ویدیو", callback_data="act_video")
     btn_audio = types.InlineKeyboardButton("🎧 استخراج صدا (Audio)", callback_data="act_audio")
@@ -87,7 +87,7 @@ def handle_verification(call):
     if is_user_member(call.from_user.id):
         bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!", show_alert=True)
         bot.edit_message_text(
-            "🎉 خوش آمدید! حالا می‌توانید لینک ویدیوی خود را برای دانلود ارسال کنید.",
+            "🎉 خوش آمدید! اکنون لینک مورد نظر خود را ارسال کنید.",
             call.message.chat.id,
             call.message.message_id
         )
@@ -96,10 +96,11 @@ def handle_verification(call):
 
 @bot.message_handler(func=lambda m: not m.text.startswith('/'))
 def handle_link_input(message):
+    # بررسی عضویت قبل از پردازش متن ارسالی
     if not is_user_member(message.from_user.id):
         return bot.reply_to(
             message,
-            f"⚠️ برای دانلود فایل‌ها، ابتدا باید در کانال ما عضو شوید:\n👉 {CHANNEL_USERNAME}",
+            f"⚠️ برای دانلود فایل، ابتدا باید در کانال ما عضو شوید:\n👉 {CHANNEL_USERNAME}",
             reply_markup=get_join_keyboard()
         )
 
@@ -116,11 +117,13 @@ def handle_link_input(message):
 
 @bot.callback_query_handler(func=lambda call: call.data in ["act_video", "act_audio", "act_thumb"])
 def handle_action_choice(call):
+    # بررسی عضویت قبل از شروع عملیات دانلود
     if not is_user_member(call.from_user.id):
-        bot.answer_callback_query(call.id, "⚠️ لطفاً ابتدا در کانال عضو شوید.", show_alert=True)
-        return bot.send_message(
+        bot.answer_callback_query(call.id, "⚠️ شما در کانال عضو نیستید!", show_alert=True)
+        return bot.edit_message_text(
+            f"⚠️ برای ادامه استفاده، لطفاً ابتدا در کانال عضو شوید:\n👉 {CHANNEL_USERNAME}",
             call.message.chat.id,
-            f"⚠️ برای ادامه استفاده، در کانال عضو شوید:\n👉 {CHANNEL_USERNAME}",
+            call.message.message_id,
             reply_markup=get_join_keyboard()
         )
 
@@ -198,5 +201,5 @@ def _process_request(b, msg, url, action_type):
         b.send_message(chat_id, "❌ خطایی در دانلود پیش آمد (ممکن است فایل بالای ۵۰ مگابایت، پیج خصوصی یا لینک منقضی باشد).")
 
 if __name__ == '__main__':
-    logger.info("Bot is running with Force Join system...")
+    logger.info("Bot is running with strict Force Join...")
     bot.infinity_polling()
